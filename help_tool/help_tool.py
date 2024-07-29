@@ -161,7 +161,12 @@ def extract_and_combine_image_attributes(base_dir):
 
     # Create a DataFrame from the collected data
     df = pd.DataFrame(all_image_data)
-    df['ID_number'] = df['ID'].str.split('_', expand=True)[0].astype(int)
+    # try:
+    #     df['ID'].str.split('_', expand=True)[0].astype(int)
+    #     df['ID_number'] = df['ID'].str.split('_', expand=True)[0].astype(int)
+
+    # except: 
+    #     pass
     
     return df
 

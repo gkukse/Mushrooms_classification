@@ -5,6 +5,7 @@ __pycache__/
 # Ignore virtual environment
 venv/
 env/
+model_env/
 
 # Ignore Archive folder and its contents
 Archive/
