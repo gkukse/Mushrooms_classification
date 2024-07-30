@@ -9,6 +9,8 @@ model_env/
 
 # Ignore Archive folder and its contents
 Archive/
+lightning_logs/
+checkpoints/
 
 # Ignore log files
 *.log
