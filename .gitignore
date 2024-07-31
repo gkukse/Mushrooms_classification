@@ -11,6 +11,7 @@ model_env/
 Archive/
 lightning_logs/
 checkpoints/
+tb_logs\
 
 # Ignore log files
 *.log

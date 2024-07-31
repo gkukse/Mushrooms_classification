@@ -27,6 +27,34 @@ from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_sco
 pd.plotting.register_matplotlib_converters()
 
 
+import os
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from PIL import Image
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import torchvision
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchmetrics
+import pytorch_lightning as pl
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import StepLR
+from torchvision import models
+from torch.utils.data import DataLoader
+from torchsummary import summary
+from sklearn.metrics import confusion_matrix
+from pytorch_lightning import LightningModule, Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
+from torchvision.models import ResNet18_Weights
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
 
 def distribution_check(df: pd.DataFrame, hue: str) -> None:
     """Box plot graph for identifying numeric column outliers, normality of distribution."""
@@ -160,64 +188,177 @@ def extract_and_combine_image_attributes(base_dir):
                 all_image_data.append(image_data)
 
     # Create a DataFrame from the collected data
-    df = pd.DataFrame(all_image_data)
-    # try:
-    #     df['ID'].str.split('_', expand=True)[0].astype(int)
-    #     df['ID_number'] = df['ID'].str.split('_', expand=True)[0].astype(int)
-
-    # except: 
-    #     pass
-    
+    df = pd.DataFrame(all_image_data)    
     return df
 
 
-# def extract_and_combine_image_attributes(base_dir):
-#     """Extract image attributes from all folders and return a DataFrame."""
-#     all_image_data = []
 
-#     # Helper function to extract image attributes
-#     def extract_image_attributes(image_path, class_name):
-#         with Image.open(image_path) as img:
+def get_model_metrics(model, dataset, batch_size):
+
+    classes = dataset.classes
+    num_classes = len(classes)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    metrics = {
+        'accuracy': torchmetrics.Accuracy(task='multiclass', num_classes=num_classes).to(device),
+        'precision': torchmetrics.Precision(task='multiclass', num_classes=num_classes, average='macro').to(device),
+        'recall': torchmetrics.Recall(task='multiclass', num_classes=num_classes, average='macro').to(device),
+        'f1': torchmetrics.F1Score(task='multiclass', num_classes=num_classes, average='macro').to(device),
+        'roc': torchmetrics.ROC(task='multiclass', num_classes=num_classes, average='macro').to(device)
+    }
+
+
+    model.to(device)
+    model.eval()
+
+
+    test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    with torch.no_grad():
+        for batch in test_loader:
+            x, y = batch
+            x, y = x.to(device), y.to(device)  # Move data to the same device as the model
+            
+            y_hat = model(x)
+
+            # Update metrics
+            metrics['accuracy'].update(y_hat, y)
+            metrics['precision'].update(y_hat, y)
+            metrics['recall'].update(y_hat, y)
+            metrics['f1'].update(y_hat, y)
+
+
+
+
+    accuracy = metrics['accuracy'].compute()
+    precision = metrics['precision'].compute()
+    recall = metrics['recall'].compute()
+    f1 = metrics['f1'].compute()
+
+    print(f'Accuracy: {accuracy:.4f}')
+    print(f'Precision: {precision:.4f}')
+    print(f'Recall: {recall:.4f}')
+    print(f'F1 Score: {f1:.4f}')
+
+
+
+
+def confusion_matrix_plot(model, dataset, loader):
+    # Function to get model predictions and true labels
+    def get_predictions_and_labels(model, dataloader, device):
+        model.eval()  # Set model to evaluation mode
+        predictions = []
+        true_labels = []
+        
+        with torch.no_grad():
+            for inputs, labels in dataloader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
                 
-#             width, height = img.size
-#             file_size = os.path.getsize(image_path)
-#             file_format = img.format
-#             mode = img.mode
+                outputs = model(inputs)
+                _, preds = torch.max(outputs, 1)
+                
+                predictions.extend(preds.cpu().numpy())
+                true_labels.extend(labels.cpu().numpy())
+        
+        return np.array(predictions), np.array(true_labels)
 
-#             # Convert image to NumPy array
-#             img_array = np.array(img)
-            
-#             # Calculate average color
-#             avg_color = img_array.mean(axis=(0, 1))
-#             std_color = img_array.std(axis=(0, 1))
-            
-#             return {
-#                 'ID': os.path.basename(image_path),
-#                 'Class': class_name,
-#                 'Width': width,
-#                 'Height': height,
-#                 'File Size': file_size,
-#                 'File Format': file_format,
-#                 'Mode': mode,
-#                 'Avg R': avg_color[0],
-#                 'Avg G': avg_color[1],
-#                 'Avg B': avg_color[2],
-#                 'Std R': std_color[0],
-#                 'Std G': std_color[1],
-#                 'Std B': std_color[2]
-#             }
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#     # Process each class folder
-#     class_folders = get_class_folders(base_dir)
-#     for folder in class_folders:
-#         class_name = os.path.basename(folder)
-#         for entry in os.scandir(folder):
-#             if entry.is_file():
-#                 image_data = extract_image_attributes(entry.path, class_name)
-#                 all_image_data.append(image_data)
+    # Assuming val_loader is your DataLoader for the validation set
+    predictions, true_labels = get_predictions_and_labels(model, loader, device)
 
-#     # Create a DataFrame from the collected data
-#     df = pd.DataFrame(all_image_data)
+    # Get class names (assuming class_names is a list of your class labels)
+    class_names = dataset.classes
+
+    # Compute confusion matrix
+    cm = confusion_matrix(true_labels, predictions)
+
+    # Plot confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
+    plt.xlabel('Predicted Label')
+    plt.ylabel('True Label')
+    plt.title('Confusion Matrix')
+    plt.show()
+
+
+
+def mean_inference_time(model):
+
+   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+   model.to(device)
+   dummy_input = torch.randn(1, 3,224,224,dtype=torch.float).to(device)
+   starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+   repetitions = 300
+   timings=np.zeros((repetitions,1))
+
+   #GPU-WARM-UP
+   for _ in range(10):
+      _ = model(dummy_input)
+
+   # MEASURE PERFORMANCE
+   with torch.no_grad():
+      for rep in range(repetitions):
+         starter.record()
+         _ = model(dummy_input)
+         ender.record()
+
+         # WAIT FOR GPU SYNC
+         torch.cuda.synchronize()
+         curr_time = starter.elapsed_time(ender)
+         timings[rep] = curr_time
+
+   mean_syn = np.sum(timings) / repetitions
+   std_syn = np.std(timings)
+
+   print(f"Mean Inference = {mean_syn:.2f} [ms], Standard deviation = {std_syn:.2f} [ms]")
+
+
+def loss_accuracy_plots(event_log_path):
+    # Function to extract scalar data
+    def extract_scalars(event_accumulator, tag):
+        events = event_accumulator.Scalars(tag)
+        steps = [event.step for event in events]
+        values = [event.value for event in events]
+        return steps, values
     
-#     return df
 
+    event_accumulator = EventAccumulator(event_log_path)
+    event_accumulator.Reload()
+
+    # Define tags for metrics
+    loss_tags = ['train_loss', 'val_loss']
+    accuracy_tags = ['train_accuracy', 'val_accuracy']
+
+    # Extract data from TensorBoard logs
+    loss_data = {tag: extract_scalars(event_accumulator, tag) for tag in loss_tags}
+    accuracy_data = {tag: extract_scalars(event_accumulator, tag) for tag in accuracy_tags}
+
+    # Plot Loss
+    plt.figure(figsize=(12, 6))
+
+    for tag, (steps, values) in loss_data.items():
+        plt.plot(steps, values, label=tag)
+
+    plt.xlabel('Step')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Plot Accuracy
+    plt.figure(figsize=(12, 6))
+
+    for tag, (steps, values) in accuracy_data.items():
+        plt.plot(steps, values, label=tag)
+
+    plt.xlabel('Step')
+    plt.ylabel('Accuracy')
+    plt.title('Training and Validation Accuracy')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
