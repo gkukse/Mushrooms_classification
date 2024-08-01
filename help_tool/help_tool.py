@@ -218,7 +218,7 @@ def get_model_metrics(model, dataset, batch_size):
     with torch.no_grad():
         for batch in test_loader:
             x, y = batch
-            x, y = x.to(device), y.to(device)  # Move data to the same device as the model
+            x, y = x.to(device), y.to(device)  # Move data to the same device the model
             
             y_hat = model(x)
 
@@ -317,15 +317,30 @@ def mean_inference_time(model):
    print(f"Mean Inference = {mean_syn:.2f} [ms], Standard deviation = {std_syn:.2f} [ms]")
 
 
-def loss_accuracy_plots(event_log_path):
+
+def loss_accuracy_plots(event_log_path, batch_size, train_loader):
     # Function to extract scalar data
     def extract_scalars(event_accumulator, tag):
         events = event_accumulator.Scalars(tag)
         steps = [event.step for event in events]
         values = [event.value for event in events]
         return steps, values
-    
 
+    # Function to aggregate scalar data by epoch
+    def aggregate_by_epoch(steps, values):
+
+        num_samples = len(train_loader.dataset)
+        steps_per_epoch = num_samples // batch_size
+
+        epoch_values = {}
+        for step, value in zip(steps, values):
+            epoch = step // steps_per_epoch
+            if epoch not in epoch_values:
+                epoch_values[epoch] = []
+            epoch_values[epoch].append(value)
+        epoch_means = {epoch: sum(values)/len(values) for epoch, values in epoch_values.items()}
+        return list(epoch_means.keys()), list(epoch_means.values())
+    
     event_accumulator = EventAccumulator(event_log_path)
     event_accumulator.Reload()
 
@@ -337,28 +352,31 @@ def loss_accuracy_plots(event_log_path):
     loss_data = {tag: extract_scalars(event_accumulator, tag) for tag in loss_tags}
     accuracy_data = {tag: extract_scalars(event_accumulator, tag) for tag in accuracy_tags}
 
+    # Aggregate data by epoch
+    aggregated_loss_data = {tag: aggregate_by_epoch(steps, values) for tag, (steps, values) in loss_data.items()}
+    aggregated_accuracy_data = {tag: aggregate_by_epoch(steps, values) for tag, (steps, values) in accuracy_data.items()}
+
+    # Create a figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
     # Plot Loss
-    plt.figure(figsize=(12, 6))
-
-    for tag, (steps, values) in loss_data.items():
-        plt.plot(steps, values, label=tag)
-
-    plt.xlabel('Step')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    for tag, (epochs, values) in aggregated_loss_data.items():
+        ax1.plot(epochs, values, marker='o', label=tag)
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training and Validation Loss')
+    ax1.legend()
 
     # Plot Accuracy
-    plt.figure(figsize=(12, 6))
+    for tag, (epochs, values) in aggregated_accuracy_data.items():
+        ax2.plot(epochs, values, marker='o', label=tag)
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Accuracy')
+    ax2.set_title('Training and Validation Accuracy')
+    ax2.legend()
 
-    for tag, (steps, values) in accuracy_data.items():
-        plt.plot(steps, values, label=tag)
 
-    plt.xlabel('Step')
-    plt.ylabel('Accuracy')
-    plt.title('Training and Validation Accuracy')
-    plt.legend()
-    plt.grid(True)
+    fig.suptitle('Deep Neural Net Performance', fontsize=14)
     plt.show()
+
+
