@@ -2,14 +2,10 @@
 data cleaning and preprocessing"""
 
 
-from scipy.stats import chi2_contingency
 import os
-from typing import Optional, Any
-
-
+from itertools import combinations
 from collections import defaultdict
-from PIL import Image, ImageOps, ImageFile
-from tensorflow.keras.preprocessing.image import img_to_array, load_img, save_img
+from PIL import Image, ImageFile
 
 # Allow loading of truncated images
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -18,42 +14,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import statsmodels.api as sm
-from scipy import stats
-from sklearn.metrics import (accuracy_score, auc, confusion_matrix, roc_curve)
-from sklearn.model_selection import KFold
-from sklearn.metrics import matthews_corrcoef
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.metrics import confusion_matrix
+
 pd.plotting.register_matplotlib_converters()
 
-
-import os
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from PIL import Image
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-import torchvision
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torchmetrics
-import pytorch_lightning as pl
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import StepLR
-from torchvision import models
 from torch.utils.data import DataLoader
-from torchsummary import summary
-from sklearn.metrics import confusion_matrix
-from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
-from torchvision.models import ResNet18_Weights
+
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
 
 
 def distribution_check(df: pd.DataFrame, hue: str) -> None:
@@ -137,7 +109,7 @@ def load_sample_image(folder_path):
             return Image.open(entry.path)
     return None
 
-def visualize_sample_images(base_dir):
+def visualize_handfull_images(base_dir):
     class_folders = get_class_folders(base_dir)
     
     plt.figure(figsize=(12, 8))
@@ -380,3 +352,185 @@ def loss_accuracy_plots(event_log_path, batch_size, train_loader):
     plt.show()
 
 
+
+def calculate_histogram(image_path):
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    hist_r = cv2.calcHist([image], [0], None, [256], [0, 256])
+    hist_g = cv2.calcHist([image], [1], None, [256], [0, 256])
+    hist_b = cv2.calcHist([image], [2], None, [256], [0, 256])
+
+    hist_r = cv2.normalize(hist_r, hist_r).flatten()
+    hist_g = cv2.normalize(hist_g, hist_g).flatten()
+    hist_b = cv2.normalize(hist_b, hist_b).flatten()
+
+    return hist_r, hist_g, hist_b
+
+def compare_histograms(hist1, hist2):
+    score_r = cv2.compareHist(hist1[0], hist2[0], cv2.HISTCMP_CORREL)
+    score_g = cv2.compareHist(hist1[1], hist2[1], cv2.HISTCMP_CORREL)
+    score_b = cv2.compareHist(hist1[2], hist2[2], cv2.HISTCMP_CORREL)
+    return (score_r + score_g + score_b) / 3  # Average score of RGB channels
+
+def compare_images_in_directory(directory_path):
+    image_files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) if f.endswith(('jpg', 'jpeg', 'png'))]
+    
+    if len(image_files) < 2:
+        print("Need at least two images to compare.")
+        return
+
+    histograms = {image_file: calculate_histogram(image_file) for image_file in image_files}
+
+    comparison_results = []
+    
+    for img1, img2 in combinations(image_files, 2):
+        score = compare_histograms(histograms[img1], histograms[img2])
+        comparison_results.append((directory_path, os.path.basename(img1), os.path.basename(img2), score))
+
+    comparison_results.sort(key=lambda x: x[3], reverse=True)
+
+    # Convert to DataFrame
+    df_results = pd.DataFrame(comparison_results, columns=['Location', 'Image1', 'Image2', 'SimilarityScore'])
+    
+    return df_results
+
+
+def build_image_comparition_df(base_dir):
+
+
+    def calculate_histogram(image_path):
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        hist_r = cv2.calcHist([image], [0], None, [256], [0, 256])
+        hist_g = cv2.calcHist([image], [1], None, [256], [0, 256])
+        hist_b = cv2.calcHist([image], [2], None, [256], [0, 256])
+
+        hist_r = cv2.normalize(hist_r, hist_r).flatten()
+        hist_g = cv2.normalize(hist_g, hist_g).flatten()
+        hist_b = cv2.normalize(hist_b, hist_b).flatten()
+
+        return hist_r, hist_g, hist_b
+
+    def compare_histograms(hist1, hist2):
+        score_r = cv2.compareHist(hist1[0], hist2[0], cv2.HISTCMP_CORREL)
+        score_g = cv2.compareHist(hist1[1], hist2[1], cv2.HISTCMP_CORREL)
+        score_b = cv2.compareHist(hist1[2], hist2[2], cv2.HISTCMP_CORREL)
+        return (score_r + score_g + score_b) / 3  # Average score of RGB channels
+
+    def compare_images_in_directory(directory_path):
+        image_files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) if f.endswith(('jpg', 'jpeg', 'png'))]
+        
+        if len(image_files) < 2:
+            print("Need at least two images to compare.")
+            return
+
+        histograms = {image_file: calculate_histogram(image_file) for image_file in image_files}
+
+        comparison_results = []
+        
+        for img1, img2 in combinations(image_files, 2):
+            score = compare_histograms(histograms[img1], histograms[img2])
+            comparison_results.append((directory_path, os.path.basename(img1), os.path.basename(img2), score))
+
+        comparison_results.sort(key=lambda x: x[3], reverse=True)
+
+        # Convert to DataFrame
+        df_results = pd.DataFrame(comparison_results, columns=['Location', 'Image1', 'Image2', 'SimilarityScore'])
+        
+        return df_results 
+
+    df=pd.DataFrame()
+
+    for class_folder in os.scandir(base_dir):
+        if class_folder.is_dir():  
+            class_folder_path = class_folder.path
+            comparison_results_df = compare_images_in_directory(class_folder_path)
+
+            df = pd.concat([comparison_results_df, df], ignore_index=True)
+    return df
+
+
+def display_image_pairs(df):
+
+
+    for index, row in df.iterrows():
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+        img1_path = os.path.join(row['Location'], row['Image1'])
+        img2_path = os.path.join(row['Location'], row['Image2'])
+
+        img1 = Image.open(img1_path)
+        img2 = Image.open(img2_path)
+
+        axes[0].imshow(img1)
+        axes[0].axis('off')
+        axes[0].set_title(f"{row['Image1']}, {row['SimilarityScore']:.3f}")
+
+        axes[1].imshow(img2)
+        axes[1].axis('off')
+        axes[1].set_title(f"{row['Image2']}, {row['SimilarityScore']:.3f}")
+
+        plt.show()
+
+def visualize_sample_images(df):
+    """Visualizes sample images from DataFrame in a grid of 6 columns."""
+    
+    # Number of images
+    num_images = len(df)
+    
+    # Determine number of rows needed
+    num_rows = (num_images + 5) // 6  # Ceiling division to ensure all images fit
+    
+    plt.figure(figsize=(18, num_rows * 3))  # Adjust height based on the number of rows
+    
+    for i, (index, row) in enumerate(df.iterrows()):
+        img_path = os.path.join(row['Location'], row['Image1'])
+        
+        if os.path.exists(img_path):
+            img = Image.open(img_path)
+            plt.subplot(num_rows, 6, i + 1)  # Plot in a grid with 6 columns
+            plt.imshow(img)
+            plt.title(f"{row['Image1']}\n{row['SimilarityScore']:.3f}")
+            plt.axis('off')
+        else:
+            print(f'Image not found: {img_path}')
+    
+    # Hide unused subplots if the number of images is not a multiple of 6
+    num_plots = num_rows * 6
+    if num_images < num_plots:
+        for j in range(num_images + 1, num_plots + 1):
+            plt.subplot(num_rows, 6, j)
+            plt.axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def display_images_grid(results_df, base_dir, grid_size=(4, 4)):
+    """Display images in a 4x4 grid"""
+    num_images = len(results_df)
+    num_rows, num_cols = grid_size
+    total_images_to_show = num_rows * num_cols
+
+    for start in range(0, num_images, total_images_to_show):
+        end = min(start + total_images_to_show, num_images)
+        subset_df = results_df.iloc[start:end]
+
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(15, 15))
+        axes = axes.flatten()  # Flatten the 2D array of axes to easily iterate
+
+        for ax, (_, row) in zip(axes, subset_df.iterrows()):
+            image_path = os.path.join(base_dir, row['Class'], row['ID'])
+            img = Image.open(image_path)
+            ax.imshow(img)
+            ax.axis('off')  # Hide axes
+            ax.set_title(f"{row['Class']}/{row['ID']}", fontsize=8)
+
+        # Hide any unused subplots
+        for ax in axes[len(subset_df):]:
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.show()
